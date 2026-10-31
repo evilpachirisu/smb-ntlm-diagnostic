@@ -1,0 +1,327 @@
+--- a/Start-SmbDiagnostic.ps1
++++ b/Start-SmbDiagnostic.ps1
+@@ -2,6 +2,7 @@
+ param(
+     [switch]$DropSSP,
+     [switch]$Quiet,
++    [switch]$ShowNetNTLM,
+     [string]$BindAddress = '127.0.0.1',
+     [ValidateRange(1,65535)][int]$Port = 8446,
+     [ValidateSet('both','jsonl','text')][string]$Format = 'both',
+@@ -14,6 +15,7 @@
+ Push-Location $PSScriptRoot
+ try {
+     $ExtraArgs = @()
++    if ($ShowNetNTLM) { $ExtraArgs += '--show-netntlm' }
+     if ($Quiet) { $ExtraArgs += '--quiet' }
+     if ($DropSSP) { $ExtraArgs += '--drop-ssp' }
+     & $Python -m smbdiag --bind $BindAddress --port $Port --format $Format `
+--- a/smbdiag/__main__.py
++++ b/smbdiag/__main__.py
+@@ -7,6 +7,7 @@
+ 
+ def main():
+     parser = argparse.ArgumentParser(description='Metadata-only SMB2/NTLM diagnostic listener')
++    parser.add_argument('--show-netntlm', action='store_true', help='Display observed NetNTLMv1/v2 challenge-response evidence on console only')
+     parser.add_argument('--quiet', action='store_true', help='Suppress runtime console output; keep file logs')
+     parser.add_argument('--bind', default='127.0.0.1', help='IPv4 listen address')
+     parser.add_argument('--port', type=int, default=8446)
+@@ -24,12 +25,14 @@
+             raise ValueError('JSONL and text paths must differ')
+     except ValueError as exc:
+         parser.error(str(exc))
++    console = ConsoleDisplay(quiet=args.quiet, show_netntlm=args.show_netntlm)
+     events = EventLog(args.jsonl if args.format != 'text' else None,
+                       args.text if args.format != 'jsonl' else None,
+-                      observer=ConsoleDisplay(quiet=args.quiet))
++                      observer=console)
+     server = None
+     try:
+-        server = DiagnosticServer((args.bind, args.port), events, args.idle_timeout, drop_ssp=args.drop_ssp)
++        server = DiagnosticServer((args.bind, args.port), events, args.idle_timeout, drop_ssp=args.drop_ssp,
++                                  response_observer=console.show_response if args.show_netntlm and not args.quiet else None)
+         events.emit('listen', stage='listening', bind=args.bind, port=server.server_address[1], drop_ssp=args.drop_ssp)
+         server.serve_forever(poll_interval=0.2)
+     except KeyboardInterrupt:
+--- a/smbdiag/console.py
++++ b/smbdiag/console.py
+@@ -1,5 +1,6 @@
+-"""ASCII, metadata-only event presentation; no protocol parsing or classification."""
++"""ASCII event and opt-in evidence presentation; no protocol parsing or classification."""
+ import ipaddress
++import json
+ import re
+ import sys
+ import threading
+@@ -37,9 +38,10 @@
+ 
+ 
+ class ConsoleDisplay:
+-    def __init__(self, stream=None, quiet=False):
++    def __init__(self, stream=None, quiet=False, show_netntlm=False):
+         self.stream = stream if stream is not None else sys.stdout
+         self.quiet = quiet
++        self.show_netntlm = show_netntlm
+         self.lock = threading.Lock()
+         self.connections = {}
+         self.disabled = False
+@@ -64,7 +66,8 @@
+         if event == 'listen':
+             return ['[*] SMB Diagnostic Server started',
+                     '[*] Listening: ' + endpoint(row.get('bind'), row.get('port')),
+-                    '[*] DropSSP: ' + ('Enabled' if row.get('drop_ssp') else 'Disabled')]
++                    '[*] DropSSP: ' + ('Enabled' if row.get('drop_ssp') else 'Disabled')] + (
++                    ['[!] NetNTLM evidence display: Enabled'] if self.show_netntlm else [])
+         if event == 'stop':
+             self.connections.clear()
+             return ['[*] SMB Diagnostic Server stopped']
+@@ -100,6 +103,25 @@
+             return ['[-] ' + tag + ' Disconnected (' + self.reason(row) + result + ')']
+         return []
+ 
++    def show_response(self, cid, ip, port, label, hash_string):
++        """Separate opt-in console channel; never submits secrets to EventLog."""
++        if not self.show_netntlm or self.quiet or self.disabled:
++            return
++        if label not in ('NetNTLMv1', 'NetNTLMv1 (ESS)', 'NetNTLMv2'):
++            return
++        tag = endpoint(ip, port)
++        if isinstance(cid, str) and re.fullmatch(r'[0-9a-fA-F]+', cid):
++            tag += ' [id=' + cid[:8] + ']'
++        # Escape controls/Unicode for terminal safety, preserving colon/hex fields.
++        safe = json.dumps(hash_string, ensure_ascii=True)[1:-1]
++        with self.lock:
++            try:
++                self.stream.write('[!] ' + tag + ' ' + label + ': ' + safe + '\n')
++                self.stream.flush()
++            except (OSError, UnicodeError, ValueError):
++                self.disabled = True
++                self.connections.clear()
++
+     @staticmethod
+     def reason(row):
+         return REASONS.get(row.get('reason'), 'see event log')
+--- /dev/null
++++ b/smbdiag/evidence.py
+@@ -0,0 +1,20 @@
++"""Opt-in transient formatting of observed NetNTLM challenge/response evidence."""
++from impacket.smbserver import outputToJohnFormat
++from .metadata import security_buffer
++
++FORMS = {'NTLMv1': 'NetNTLMv1', 'NTLMv1-ESS': 'NetNTLMv1 (ESS)', 'NTLMv2': 'NetNTLMv2'}
++
++
++def format_response(token, challenge, response_format):
++    """Use the existing classification; never format unknown/empty responses."""
++    if response_format not in FORMS or not isinstance(challenge, bytes) or len(challenge) != 8:
++        return None
++    # The metadata parser already validated the Type 3 and all buffer boundaries.
++    lm = security_buffer(token, 12, 64)
++    nt = security_buffer(token, 20, 64)
++    domain = security_buffer(token, 28, 64)
++    user = security_buffer(token, 36, 64)
++    result = outputToJohnFormat(challenge, user, domain, lm, nt)
++    if isinstance(result, dict) and isinstance(result.get('hash_string'), str):
++        return FORMS[response_format], result['hash_string']
++    return None
+--- a/smbdiag/server.py
++++ b/smbdiag/server.py
+@@ -83,11 +83,12 @@
+     daemon_threads = False
+     block_on_close = True
+ 
+-    def __init__(self, address, events, idle_timeout=15, drop_ssp=False):
++    def __init__(self, address, events, idle_timeout=15, drop_ssp=False, response_observer=None):
+         if importlib.metadata.version('impacket') != '0.13.1':
+             raise RuntimeError('Impacket 0.13.1 required')
+         validate_port(address[1], ephemeral=True)
+         self.events = events
++        self.response_observer = response_observer
+         self.idle_timeout = idle_timeout
+         self.state = {}
+         self.clients = set()
+@@ -261,6 +262,17 @@
+                              status=f'0x{status:08x}', drop_ssp=self.drop_ssp, **meta2)
+                 return [response], None, status
+             if meta['message_type'] == 3:
++                if ess is not None and self.response_observer is not None:
++                    # Never send response material through EventLog or authentication.
++                    # Formatting/display failures must not affect diagnostics.
++                    try:
++                        from .evidence import format_response
++                        conn = self.getConnectionData(cid, False)
++                        evidence = format_response(token, conn['CHALLENGE_MESSAGE']['challenge'], meta['response_format'])
++                        if evidence is not None:
++                            self.response_observer(cid, state['ip'], state['port'], *evidence)
++                    except Exception:
++                        pass
+                 status = STATUS_LOGON_FAILURE
+                 reason = 'diagnostic_only_no_credential_validation' if ess is not None else 'type3_out_of_sequence'
+             else:
+--- /dev/null
++++ b/tests/test_evidence.py
+@@ -0,0 +1,164 @@
++import io
++import json
++import socket
++import subprocess
++import sys
++import time
++import struct
++import unittest
++from unittest.mock import patch
++from impacket import ntlm, smb3structs as smb2
++from smbdiag.console import ConsoleDisplay
++from smbdiag.evidence import format_response
++from smbdiag.client import probe
++import test_diagnostic as fixtures
++from test_diagnostic import exchange, negotiate, setup
++
++
++def authenticate(lm, nt, flags=1):
++    fields = [lm, nt, 'LAB'.encode('utf-16le'), 'evidence-user'.encode('utf-16le'), b'', b'']
++    header = b'NTLMSSP\x00' + struct.pack('<I', 3)
++    pos = 64
++    for value in fields:
++        header += struct.pack('<HHI', len(value), len(value), pos)
++        pos += len(value)
++    return header + struct.pack('<I', flags) + b''.join(fields)
++
++
++class EvidenceUnitTests(unittest.TestCase):
++    def test_format_v1_v2_and_ess_using_upstream(self):
++        challenge = bytes.fromhex('0123456789abcdef')
++        lm, nt = b'L' * 24, b'N' * 24
++        token = authenticate(lm, nt)
++        label, value = format_response(token, challenge, 'NTLMv1')
++        self.assertEqual(label, 'NetNTLMv1')
++        self.assertEqual(value, f'evidence-user::LAB:{lm.hex()}:{nt.hex()}:{challenge.hex()}')
++        self.assertEqual(format_response(token, challenge, 'NTLMv1-ESS')[0], 'NetNTLMv1 (ESS)')
++        nt = fixtures.v2_response()
++        label, value = format_response(authenticate(lm, nt), challenge, 'NTLMv2')
++        self.assertEqual(label, 'NetNTLMv2')
++        self.assertEqual(value, f'evidence-user::LAB:{challenge.hex()}:{nt[:16].hex()}:{nt[16:].hex()}')
++
++    def test_no_format_for_unknown_empty_or_missing_challenge(self):
++        with patch('smbdiag.evidence.outputToJohnFormat') as upstream:
++            for form in ('unknown', 'empty_or_anonymous'):
++                self.assertIsNone(format_response(b'', b'C' * 8, form))
++            self.assertIsNone(format_response(b'', b'', 'NTLMv2'))
++            upstream.assert_not_called()
++
++    def test_opt_in_quiet_and_terminal_escaping(self):
++        text = io.StringIO()
++        secret = 'USER\x1b[31m\n::LAB:00'
++        ConsoleDisplay(text).show_response('a' * 32, '127.0.0.1', 62069, 'NetNTLMv1', secret)
++        self.assertEqual(text.getvalue(), '')
++        ConsoleDisplay(text, quiet=True, show_netntlm=True).show_response('a' * 32, '127.0.0.1', 62069, 'NetNTLMv1', secret)
++        self.assertEqual(text.getvalue(), '')
++        ConsoleDisplay(text, show_netntlm=True).show_response('a' * 32, '127.0.0.1', 62069, 'NetNTLMv1', secret)
++        self.assertIn('NetNTLMv1:', text.getvalue())
++        self.assertNotIn('\x1b', text.getvalue())
++        self.assertEqual(len(text.getvalue().splitlines()), 1)
++
++
++class EvidenceNetworkTests(unittest.TestCase):
++    setUp = fixtures.NetworkTests.setUp
++    tearDown = fixtures.NetworkTests.tearDown
++    wait_disconnected = fixtures.NetworkTests.wait_disconnected
++    connect = fixtures.NetworkTests.connect
++    rows = fixtures.NetworkTests.rows
++
++    def enable(self):
++        self.output = io.StringIO()
++        console = ConsoleDisplay(self.output, show_netntlm=True)
++        self.events.observer = console
++        self.server.response_observer = console.show_response
++
++    def test_opt_in_v1_v2_still_rejects_and_keeps_metadata_logs(self):
++        self.enable()
++        for is_v2 in (False, True):
++            with self.connect() as sock:
++                exchange(sock, negotiate())
++                first = ntlm.getNTLMSSPType1()
++                first['flags'] &= ~0x80000
++                answer = exchange(sock, setup(first.getData()))
++                self.assertEqual(answer['Status'], 0xc0000016)
++                token = smb2.SMB2SessionSetup_Response(answer['Data'])['Buffer']
++                challenge = token[24:32]
++                lm = b'L' * 24
++                nt = fixtures.v2_response() if is_v2 else b'N' * 24
++                answer = exchange(sock, setup(authenticate(lm, nt), 2, answer['SessionID']))
++                self.assertEqual(answer['Status'], 0xc000006d)
++            self.wait_disconnected()
++            value = (f'evidence-user::LAB:{challenge.hex()}:{nt[:16].hex()}:{nt[16:].hex()}' if is_v2 else
++                     f'evidence-user::LAB:{lm.hex()}:{nt.hex()}:{challenge.hex()}')
++            self.assertIn(value, self.output.getvalue())
++            logs = self.json.read_text() + self.text.read_text()
++            for secret in (value, 'evidence-user', challenge.hex(), nt.hex()):
++                self.assertNotIn(secret, logs)
++        text = self.output.getvalue()
++        for label in ('NetNTLMv1:', 'NetNTLMv2:', '>>> NTLMv1 detected', '>>> NTLMv2 detected', 'Disconnected'):
++            self.assertIn(label, text)
++        self.assertEqual(len([r for r in self.rows() if r.get('message_type') == 3]), 2)
++
++    def test_unknown_and_out_of_sequence_have_no_evidence(self):
++        self.enable()
++        with self.connect() as sock:
++            exchange(sock, negotiate())
++            answer = exchange(sock, setup(authenticate(b'L' * 24, b'N' * 24)))
++            self.assertEqual(answer['Status'], 0xc000006d)
++        self.wait_disconnected()
++        with self.connect() as sock:
++            exchange(sock, negotiate())
++            answer = exchange(sock, setup(ntlm.getNTLMSSPType1().getData()))
++            answer = exchange(sock, setup(authenticate(b'L' * 24, b'N' * 10), 2, answer['SessionID']))
++            self.assertEqual(answer['Status'], 0xc000006d)
++        self.wait_disconnected()
++        self.assertIn('Unknown', self.output.getvalue())
++        self.assertNotIn('NetNTLMv1:', self.output.getvalue())
++        self.assertNotIn('NetNTLMv2:', self.output.getvalue())
++
++    def test_display_failure_does_not_affect_diagnostics(self):
++        def failing(*args):
++            raise OSError('synthetic console failure')
++        self.server.response_observer = failing
++        with patch('impacket.smbserver.writeJohnOutputToFile') as write:
++            result = probe(port=self.server.server_address[1])
++            self.assertTrue(result[-1]['expected_diagnostic_rejection'])
++            self.wait_disconnected()
++            write.assert_not_called()
++        self.assertTrue(any(r['event'] == 'session_result' for r in self.rows()))
++
++
++    def test_runtime_option_and_quiet_precedence(self):
++        for quiet in (False, True):
++            with socket.socket() as temporary:
++                temporary.bind(('127.0.0.1', 0))
++                port = temporary.getsockname()[1]
++            path = self.json.parent / ('option-' + str(quiet) + '.jsonl')
++            command = [sys.executable, '-m', 'smbdiag', '--show-netntlm', '--port', str(port),
++                       '--format', 'jsonl', '--jsonl', str(path)]
++            if quiet:
++                command.append('--quiet')
++            child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
++            try:
++                deadline = time.monotonic() + 10
++                while not path.exists() or not path.read_text():
++                    self.assertIsNone(child.poll())
++                    self.assertLess(time.monotonic(), deadline)
++                    time.sleep(0.02)
++                probe(port=port)
++                deadline = time.monotonic() + 5
++                while 'disconnect' not in path.read_text():
++                    self.assertLess(time.monotonic(), deadline)
++                    time.sleep(0.02)
++            finally:
++                child.terminate()
++                stdout, stderr = child.communicate(timeout=10)
++            self.assertEqual(stderr, b'')
++            if quiet:
++                self.assertEqual(stdout, b'')
++            else:
++                self.assertIn(b'NetNTLMv2:', stdout)
++                self.assertIn(b'>>> NTLMv2 detected', stdout)
++                self.assertIn(b'Connected', stdout)
++            self.assertNotIn('hash_string', path.read_text())
++            self.assertNotIn('NetNTLMv2:', path.read_text())

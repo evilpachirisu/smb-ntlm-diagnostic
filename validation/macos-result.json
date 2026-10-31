@@ -1,0 +1,132 @@
+{
+  "timestamp": "2026-10-30T15:10:36.502964+00:00",
+  "system": "Darwin",
+  "release": "25.5.0",
+  "os_version": "Darwin Kernel Version 25.5.0: Mon Apr 27 20:40:51 PDT 2026; root:xnu-12377.121.6~2/RELEASE_ARM64_T8112",
+  "architecture": "arm64",
+  "python": "3.9.6",
+  "impacket": "0.13.1",
+  "tests_run": 28,
+  "failed": 0,
+  "errors": 0,
+  "skipped": 2,
+  "outcomes": [
+    {
+      "test": "test_diagnostic.MetadataTests.test_event_allowlist",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_diagnostic.MetadataTests.test_formats_and_uncertainty",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_diagnostic.MetadataTests.test_malformed",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_diagnostic.MetadataTests.test_reserved_ports",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_diagnostic.NetworkTests.test_bad_frame_and_auth",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_diagnostic.NetworkTests.test_no_common_dialect",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_diagnostic.NetworkTests.test_ntlm_and_no_secret_output",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_diagnostic.NetworkTests.test_port_busy",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_diagnostic.NetworkTests.test_smb_negotiate",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_diagnostic.NetworkTests.test_spnego_type1",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_diagnostic.NetworkTests.test_tcp_only",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_diagnostic.NetworkTests.test_timeout_and_truncated_frame",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_diagnostic.NetworkTests.test_type3_ess_and_v1_network",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_diagnostic.NetworkTests.test_upstream_client_negotiate",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_review.ClientFailureTests.test_cli_unicode_log_path_and_reserved_port",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_review.ClientFailureTests.test_connection_failure_reports_stage_without_exception_text",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_review.ClientFailureTests.test_windows_powershell_entrypoint",
+      "outcome": "skipped",
+      "reason": "Windows-only: PowerShell entry point"
+    },
+    {
+      "test": "test_review.ConstructorAndSPNEGOTests.test_drop_ssp_constructor",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_review.ConstructorAndSPNEGOTests.test_spnego_ntlm_first_multiple_mechanisms",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_review.ReviewTests.test_default_impacket_client_bootstrap",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_review.ReviewTests.test_dialect_count_ignores_trailing_context_like_bytes",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_review.ReviewTests.test_disconnect_after_type2_records_last_stage",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_review.ReviewTests.test_drop_ssp_matches_upstream_and_default_is_preserved",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_review.ReviewTests.test_local_probe_cli",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_review.ReviewTests.test_multi_dialect_and_signing_required",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_review.ReviewTests.test_probe_native_and_bootstrap",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_review.ReviewTests.test_send_failure_is_not_reported_as_sent",
+      "outcome": "passed"
+    },
+    {
+      "test": "test_review.ReviewTests.test_windows_exclusive_bind",
+      "outcome": "skipped",
+      "reason": "Windows-only: SO_EXCLUSIVEADDRUSE"
+    }
+  ],
+  "windows_executed": false,
+  "windows_11_tests_passed": false,
+  "server2022_interoperability": "not_run"
+}

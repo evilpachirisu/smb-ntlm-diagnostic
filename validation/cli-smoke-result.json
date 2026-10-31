@@ -1,0 +1,23 @@
+{
+  "environment": "macOS Python 3.9",
+  "port": 8446,
+  "drop_ssp": true,
+  "bootstrap": true,
+  "result": "passed",
+  "type2_flags": "0xe2818215",
+  "stages": [
+    "listening",
+    "tcp_accepted",
+    "smb_negotiate_received",
+    "smb_negotiate_sent",
+    "smb_session_setup_received",
+    "ntlm_type1_received",
+    "ntlm_type2_sent",
+    "smb_session_setup_received",
+    "ntlm_type3_received",
+    "authentication_finished",
+    "disconnect",
+    "stop"
+  ],
+  "windows_executed": false
+}

@@ -40,5 +40,3 @@ py -3.11 -m venv .venv
 ## Docs
 
 [詳細ガイド](GUIDE.md) · [コンソール表示](CONSOLE.md) · [NetNTLM証跡](NETNTLM_EVIDENCE.md) · [実装・制約](REVIEW_CHANGES.md) · [検証結果](VALIDATION.md)
-
-SMB 2.0.2対応。診断後は認証失敗を返します。Windows実機・DivertTCPconn併用は未検証です。
